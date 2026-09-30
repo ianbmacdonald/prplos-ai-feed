@@ -1,0 +1,89 @@
+#!/bin/sh
+# lemond supervisor (procd instance). It OWNS the firewall rule's lifetime (a rule that could
+# outlive lemond is the failure this design exists to prevent):
+# - the rule is opened ONLY once lemond is listening, and re-checked every 10 s (tr181-firewall can lose it);
+# - on ANY exit (stop, crash, failed start, respawn exhaustion) the trap removes the rule BEFORE lemond is killed.
+# The API key is read here at exec time and handed to lemond alone: it is never in procd state, never exported
+# from this shell. Args: <key_file> <host|auto> <port> <cache_dir> <config_dir> <server_path> <placeholders...>
+KEY_FILE=$1 HOST=$2 PORT=$3 CACHE=$4 CONF=$5 SPATH=$6; shift 6
+FW=/usr/libexec/lemond-fw
+STOPPING=/var/run/lemond.stopping
+log() { logger -t lemond -p "daemon.$1" "$2"; }
+die() { log err "$1 - not starting"; exit 1; }
+lan_ips() { ip -4 -o addr show dev br-lan 2>/dev/null | sed -n 's/.* inet \([0-9.]*\)\/.*/\1/p'; }
+
+# cloud_providers with no key of their own (e.g. a LAN lemond) get a placeholder; names must be env-safe.
+for n in "$@"; do
+	case "$n" in ''|*[!A-Za-z0-9_]*) log err "ignoring provider_placeholder '$n' (not [A-Za-z0-9_])" ;;
+	*) export "LEMONADE_${n}_API_KEY=placeholder" ;; esac
+done
+
+# Key: a regular root-owned 0600 file whose first line (whitespace stripped) is >= 16 chars.
+[ -f "$KEY_FILE" ] && [ ! -L "$KEY_FILE" ] || die "no API key file at $KEY_FILE"
+case "$(ls -ln "$KEY_FILE" | awk '{print $1" "$3}')" in "-rw------- 0") ;; *) die "$KEY_FILE must be root-owned mode 0600" ;; esac
+KEY=$(head -n 1 "$KEY_FILE" | tr -d ' \t\r\n')
+[ ${#KEY} -ge 16 ] || die "API key in $KEY_FILE is empty or shorter than 16 chars"
+
+case "$PORT" in ''|*[!0-9]*) die "port '$PORT' is not a number" ;; esac
+[ "$PORT" -ge 1 ] && [ "$PORT" -le 65535 ] || die "port $PORT out of range"
+
+# Bind address: MUST be an IPv4 address on br-lan (never 0.0.0.0, loopback or the WAN). 'auto' waits up to
+# 120 s for br-lan to get one (boot ordering), then takes the first.
+t=0
+while :; do
+	ips=$(lan_ips)
+	if [ "$HOST" = auto ]; then set -- $ips; h=$1; else h=; for a in $ips; do [ "$a" = "$HOST" ] && h=$a; done; fi
+	[ -n "$h" ] && break
+	t=$((t+1)); [ $t -ge 60 ] && die "bind address '$HOST' is not an IPv4 address on br-lan"
+	sleep 2
+done
+HOST=$h
+
+# procd injects LD_PRELOAD=/lib/libsetlbf.so (its stdout line-buffering helper, a MUSL library) into any service
+# with 'stdout 1'. lemond passes its environment to the backends it spawns, and litert-lm-server is a GLIBC
+# bundle: preloading a musl .so into it segfaults it at load (exit 139; every on-box chat
+# returned 500). The supervisor keeps line buffering; lemond and its backends must not inherit the preload.
+unset LD_PRELOAD
+ulimit -c 0                         # no core file can carry the key
+[ -n "$SPATH" ] && PATH="$SPATH:$PATH"; export PATH
+
+rm -f "$STOPPING"
+# A lemond still running here was orphaned by a SIGKILLed supervisor (OOM, term_timeout): it would hold the
+# port and crash-loop this one. Retire it - matched by EXECUTABLE, never by name: 'pidof lemond' also matches
+# /etc/init.d/lemond itself (its process name is 'lemond'), and killing that killed a 'stop' mid-flight
+# (seen 3 times out of 3). Its rule goes first: nothing may stay open for a daemon that is on its way out.
+daemons() { for d in /proc/[0-9]*; do [ "$(readlink "$d/exe" 2>/dev/null)" = /usr/lib/lemond/lemond ] && echo "${d#/proc/}"; done; }
+t=0
+while p=$(daemons); [ -n "$p" ]; do
+	[ $t -eq 0 ] && { log warning "retiring orphaned lemond ($p) left by a previous supervisor"; "$FW" del; }
+	t=$((t+1)); if [ $t -le 15 ]; then kill -TERM $p 2>/dev/null; else kill -KILL $p 2>/dev/null; fi
+	[ $t -ge 20 ] && die "orphaned lemond ($p) will not exit"
+	sleep 1
+done
+LEMONADE_API_KEY=$KEY /usr/lib/lemond/lemond --host "$HOST" --port "$PORT" --no-broadcast --log-file disabled "$CACHE" "$CONF" &
+LPID=$!; KEY=; SPID=
+cleanup() {
+	trap - TERM INT HUP
+	"$FW" del                          # close the port FIRST, then stop lemond
+	[ -n "$SPID" ] && kill "$SPID" 2>/dev/null
+	kill -TERM "$LPID" 2>/dev/null; wait "$LPID" 2>/dev/null
+	exit "$1"
+}
+trap 'cleanup 0' TERM INT HUP
+
+t=0
+until netstat -ltn 2>/dev/null | grep -q " $HOST:$PORT "; do
+	kill -0 "$LPID" 2>/dev/null || { log err "lemond exited during start-up"; cleanup 1; }
+	t=$((t+1)); [ $t -ge 60 ] && { log err "lemond not listening on $HOST:$PORT after 120 s"; cleanup 1; }
+	sleep 2 & SPID=$!; wait $SPID; SPID=
+done
+log notice "lemond listening on $HOST:$PORT (pid $LPID)"
+
+# kill -0 succeeds on a ZOMBIE: this loop ends on lemond death only because busybox ash's wait (below)
+# reaps every exited child. Tested: kill -9 lemond -> loop exits, rule gone in 7 s.
+while kill -0 "$LPID" 2>/dev/null; do
+	[ -e "$STOPPING" ] || "$FW" ensure "$HOST" "$PORT"
+	sleep 10 & SPID=$!; wait $SPID; SPID=
+done
+log err "lemond (pid $LPID) exited"
+cleanup 1

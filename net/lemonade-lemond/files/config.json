@@ -1,0 +1,13 @@
+{
+ "models_dir": "/srv/lemond/models",
+ "offline": false,
+ "no_fetch_executables": true,
+ "auto_check_model_updates": false,
+ "telemetry": {
+  "enabled": false
+ },
+ "config_version": 2,
+ "cloud_providers": [],
+ "websocket_port": 9000,
+ "max_loaded_models": 2
+}

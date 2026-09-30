@@ -1,0 +1,33 @@
+#!/bin/sh
+# PATH wrapper for the litert-lm-server prebuilt bundle, installed under /usr/lib/litert-lm-server.
+#
+# The package records the bundle's C library in $DIR/LIBC:
+# - musl (x86_64, v0.3.0+): the binary finds lib/ through its RUNPATH ($ORIGIN/../lib) and runs directly.
+# - glibc (aarch64 bundle): the binary must be started through the bundle's own loader. The kernel does not expand
+#   $ORIGIN in PT_INTERP, and a musl host has no system glibc loader, so a direct exec cannot work.
+#
+# procd preloads a musl helper (LD_PRELOAD=/lib/libsetlbf.so) into services that log stdout; preloaded into a glibc
+# process it crashes it at load. It is harmless for the musl build, but unset for both.
+
+DIR=/usr/lib/litert-lm-server
+BIN="$DIR/bin/litert-lm-server"
+unset LD_PRELOAD
+
+if [ ! -x "$BIN" ]; then
+	echo "litert-lm-server: server binary missing or not executable: $BIN" >&2
+	exit 127
+fi
+
+if [ "$(cat "$DIR/LIBC" 2>/dev/null)" = musl ]; then
+	exec "$BIN" "$@"
+fi
+
+LOADER=""
+for l in "$DIR/lib/ld-linux-aarch64.so.1" "$DIR/lib/ld-linux-x86-64.so.2"; do
+	[ -x "$l" ] && { LOADER="$l"; break; }
+done
+if [ -z "$LOADER" ]; then
+	echo "litert-lm-server: glibc bundle without its loader (ld-linux-*) in $DIR/lib - reinstall litert-lm-server" >&2
+	exit 127
+fi
+exec "$LOADER" --library-path "$DIR/lib" "$BIN" "$@"

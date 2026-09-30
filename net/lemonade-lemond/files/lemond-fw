@@ -1,0 +1,158 @@
+#!/bin/sh
+# lemond-fw ensure <host> <port> | del
+# One TR-181 Firewall.Service rule per 'allow_src' for lemond's TCP port, tagged Alias 'lemond-<n>-<port>',
+# and one per 'beacon_src' for the UDP discovery-beacon port, tagged 'lemond-b<n>-<beacon_port>' (a relay that
+# rebroadcasts a LAN AI host's beacon onto this LAN).
+# WHY a helper: Firewall.Service instances are RUNTIME-ONLY on prplOS 5.1 (the persisted tr181-firewall.odl
+# holds none), so the rule must be re-added at every start, and re-checked while
+# lemond runs (the supervisor, lemond-run, calls 'ensure' every 10 s and 'del' on every exit).
+# FAIL CLOSED: every error path removes the tagged rules. Every change is READ BACK (data model AND
+# iptables -C); a logged 'active'/'removed' is never just the absence of an error.
+# Serialised by flock, so 'ensure' (supervisor) and 'del' (stop_service) can never interleave.
+. /lib/functions.sh
+TAG=lemond
+STOPPING=/var/run/lemond.stopping
+log() { logger -t lemond-fw -p "daemon.$1" "$2"; }
+
+exec 9>/var/lock/lemond-fw.lock
+flock 9
+
+config_load lemond
+valid_port() {  # 1..65535, digits only, no leading zero (0, 013305 and 99999 must never reach a rule)
+	case "$1" in ''|0*|*[!0-9]*|??????*) return 1 ;; esac
+	[ "$1" -ge 1 ] && [ "$1" -le 65535 ]
+}
+config_get PORT main port '8092'
+valid_port "$PORT" || PORT=8092              # lemond-run refuses a bad port; ensure then fails the port-match check
+config_get BPORT fw beacon_port '13305'
+BPORT_BAD=                                   # an invalid beacon_port opens NOTHING (beacon rules skipped),
+valid_port "$BPORT" || { BPORT_BAD=$BPORT; BPORT=13305; }   # never a silent fallback port; 13305 only for matching
+# the exact rules WE added (src dev port proto), so the close check waits for OURS only; a foreign
+# ACCEPT on the same port no longer wedges 'del' (tmpfs: runtime rules and this record both end at reboot).
+ADDED=/var/run/lemond-fw.rules
+
+# a FAILED query must never read as "no rules". The table always carries the gateway's own services, so
+# an empty answer is a failure too. aliases/svc_ids return 1 on failure; has_alias returns 0 found, 1 absent, 2 failed.
+aliases() { local out; out=$(ba-cli "Firewall.Service.*.Alias?" 2>/dev/null) || return 1; [ -n "$out" ] || return 1; printf '%s\n' "$out"; }
+svc_ids() {  # plain BREs, one-or-more digits (no interval expression)
+	local a; a=$(aliases) || return 1
+	printf '%s\n' "$a" | sed -n -e "s/^Firewall\.Service\.\([0-9][0-9]*\)\.Alias=\"$TAG-[0-9][0-9]*-[0-9][0-9]*\"$/\1/p" \
+		-e "s/^Firewall\.Service\.\([0-9][0-9]*\)\.Alias=\"$TAG-b[0-9][0-9]*-[0-9][0-9]*\"$/\1/p"
+}
+has_alias() { local a; a=$(aliases) || return 2; printf '%s\n' "$a" | grep -q "\.Alias=\"$1\"\$"; }
+ipt_has() { iptables -C INPUT_Services -s "$1" -i "$2" -p "$4" -m "$4" --dport "$3" -j ACCEPT 2>/dev/null; }   # $4 = tcp|udp
+ipt_any() { iptables -S INPUT_Services 2>/dev/null | grep -Eq -- "-p (tcp|udp) -m (tcp|udp) --dport ($PORT|$BPORT) -j ACCEPT\$"; }
+
+do_del() {  # re-query after EVERY delete (instance numbers may shift); verify the data model AND iptables
+	local ids n t=0 did=
+	while :; do                                   # t counts FAILURES only (a long rule list is not a failure)
+		if ! ids=$(svc_ids); then
+			log warning "Firewall.Service query failed - retrying"
+		else
+			n=$(printf '%s\n' "$ids" | head -n 1); [ -n "$n" ] || break
+			if ba-cli "Firewall.Service.$n.-" >/dev/null 2>&1; then did=1; continue; fi
+			log warning "delete of Firewall.Service.$n failed - retrying"
+		fi
+		t=$((t+1)); [ $t -ge 20 ] && { log err "FAILED to remove lemond rules - PORTS MAY STILL BE OPEN"; return 1; }
+		sleep 1
+	done
+	t=0
+	while still_open; do
+		t=$((t+1)); [ $t -ge 10 ] && { log err "data model is clean but iptables still carries a rule we added - PORT MAY STILL BE OPEN"; return 1; }
+		sleep 1
+	done
+	rm -f "$ADDED"
+	ipt_any && log warning "an ACCEPT for :$PORT or udp :$BPORT remains that lemond-fw did not add (not ours; left alone)"
+	[ -n "$did" ] && log notice "rules removed; ours closed on :$PORT and udp :$BPORT (verified in iptables)"
+	return 0
+}
+
+still_open() { local s d p pr; [ -f "$ADDED" ] || return 1; while read -r s d p pr; do ipt_has "$s" "$d" "$p" "$pr" && return 0; done < "$ADDED"; return 1; }
+fail() { log err "$1 - closing lemond's rules"; do_del; exit 1; }
+
+detect_if() {  # the Device.IP.Interface.N whose IPv4 address is exactly $1
+	# Assumes ba-cli prints "IP.Interface.N.IPv4Address.M.IPAddress=\"a.b.c.d\"" with NO "Device." prefix ($3 = N;
+	# measured on prplOS 5.1). A format change finds nothing, so ensure fails CLOSED (logged), never open.
+	ba-cli "IP.Interface.*.IPv4Address.*.IPAddress?" 2>/dev/null | \
+		awk -F'[."]' -v a="$1" '/IPAddress="/ { ip=$(NF-4)"."$(NF-3)"."$(NF-2)"."$(NF-1); if (ip == a) { print "Device.IP.Interface."$3; exit } }'
+}
+
+valid_src() {  # IPv4 a.b.c.d or a.b.c.d/1..32: octets 0..255, no leading zeros, first octet never 0
+	# ('00.0.0.0/1' must not slip past as 0.0.0.0/1)
+	local ip pfx o IFS
+	case "$1" in */*) ip=${1%/*}; pfx=${1#*/} ;; *) ip=$1; pfx=32 ;; esac
+	case "$pfx" in ''|0*|*[!0-9]*|???*) return 1 ;; esac
+	[ "$pfx" -ge 1 ] && [ "$pfx" -le 32 ] || return 1
+	case "$ip" in ''|*[!0-9.]*|.*|*.|*..*) return 1 ;; esac
+	IFS=.; set -- $ip; [ $# -eq 4 ] || return 1
+	for o; do case "$o" in 0?*|????*) return 1 ;; esac; [ "$o" -le 255 ] || return 1; done
+	[ "$1" -ne 0 ]
+}
+
+do_ensure() {
+	local host=$1 port=$2 en ifc dev srcs bsrcs s i j alias t ok want
+	# Checked under the lock: an 'ensure' that runs after stop_service has written the marker (and possibly after its
+	# 'del') must open nothing, or a rule could reappear for a daemon that is stopping.
+	[ -e "$STOPPING" ] && return 0
+	[ "$port" = "$PORT" ] || fail "port mismatch (supervisor $port, uci $PORT)"
+	config_get_bool en fw enabled 1
+	[ "$en" = 1 ] || { do_del || fail "could not clear rules after fw.enabled=0"; return 0; }   # disabled = CLOSED
+	config_get ifc fw interface ''
+	[ -n "$ifc" ] || ifc=$(detect_if "$host")
+	[ -n "$ifc" ] || fail "cannot find the IP.Interface for $host"
+	case "$ifc" in *[!A-Za-z0-9._-]*) fail "invalid fw.interface '$ifc'" ;; esac
+	dev=$(ba-cli "${ifc#Device.}.Name?" 2>/dev/null | sed -n 's/.*Name="\(.*\)"$/\1/p')
+	[ -n "$dev" ] || fail "cannot read the netdev name of $ifc"
+	[ "$dev" = br-lan ] || fail "rules apply to br-lan only, not '$dev'"   # lemond-run binds br-lan only
+	srcs=; add_src() { if valid_src "$1"; then case "$1" in */*) srcs="$srcs $1" ;; *) srcs="$srcs $1/32" ;; esac
+		else log err "ignoring invalid allow_src '$1'"; fi; }
+	config_list_foreach fw allow_src add_src
+	bsrcs=; add_bsrc() { if valid_src "$1"; then case "$1" in */*) bsrcs="$bsrcs $1" ;; *) bsrcs="$bsrcs $1/32" ;; esac
+		else log err "ignoring invalid beacon_src '$1'"; fi; }
+	config_list_foreach fw beacon_src add_bsrc
+	[ -n "$bsrcs" ] && [ -n "$BPORT_BAD" ] && { log err "invalid beacon_port '$BPORT_BAD' - beacon rules skipped"; bsrcs=; }
+	[ -n "$srcs$bsrcs" ] || { do_del || fail "could not clear rules with no sources"; return 0; }   # gateway-local only
+
+	# Already exactly right? (every expected alias + iptables rule present, and no extra tagged rules)
+	ok=1; i=0; want=
+	for s in $srcs; do i=$((i+1)); want="$want$s $dev $port tcp
+"; has_alias "$TAG-$i-$port" && ipt_has "$s" "$dev" "$port" tcp || ok=; done
+	j=0
+	for s in $bsrcs; do j=$((j+1)); want="$want$s $dev $BPORT udp
+"; has_alias "$TAG-b$j-$BPORT" && ipt_has "$s" "$dev" "$BPORT" udp || ok=; done
+	if [ -n "$ok" ] && [ "$(svc_ids | wc -l)" -eq $((i+j)) ]; then
+		printf '%s' "$want" > "$ADDED"                  # keep the record exact (also adopts rules a previous release added)
+		return 0
+	fi
+
+	do_del || fail "could not clear stale rules"
+	i=0
+	for s in $srcs; do i=$((i+1)); add_rule "$TAG-$i-$port" "$s" "$port" tcp 6; done
+	j=0
+	for s in $bsrcs; do j=$((j+1)); add_rule "$TAG-b$j-$BPORT" "$s" "$BPORT" udp 17; done
+}
+
+add_rule() {  # <alias> <src> <port> <tcp|udp> <protocol number>; uses $ifc $dev $host from do_ensure
+	local alias=$1 s=$2 p=$3 pr=$4 num=$5 t=0 r
+	while :; do                                         # tr181-firewall may still be starting at boot
+		has_alias "$alias"; r=$?
+		[ $r -eq 0 ] && { echo "$s $dev $p $pr" >> "$ADDED"; break; }   # tracked from the moment it exists
+		[ -e "$STOPPING" ] && fail "stop requested during add"
+		[ $r -eq 1 ] && ba-cli "Firewall.Service.+{Alias=\"$alias\",Action=\"Accept\",DestPort=\"$p\",Protocol=\"$num\",IPVersion=4,Interface=\"$ifc\",SourcePrefixes=\"$s\",Enable=1}" >/dev/null 2>&1
+		t=$((t+1)); [ $t -ge 60 ] && fail "could not add $alias ($s) after 60 tries"
+		sleep 2
+	done
+	t=0
+	until ipt_has "$s" "$dev" "$p" "$pr"; do
+		[ -e "$STOPPING" ] && fail "stop requested during read-back"
+		t=$((t+1)); [ $t -ge 30 ] && fail "$alias is in the data model but NOT in iptables after 60 s"
+		sleep 2
+	done
+	log notice "rule active: $s -> $host:$p/$pr on $dev ($alias)"
+}
+
+case "$1" in
+	ensure) do_ensure "$2" "$3" ;;
+	del) do_del ;;
+	*) echo "usage: $0 ensure <host> <port> | del" >&2; exit 2 ;;
+esac
