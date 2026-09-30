@@ -98,8 +98,9 @@ The packaged software keeps its own licences, declared in each Makefile's `PKG_L
 package: lemond is Apache-2.0; litert-lm-server is Apache-2.0 plus the statically linked components listed in its
 `licenses/INDEX.md` (and, for the aarch64 glibc bundle, the LGPL/GCC-runtime-exception notices of that runtime).
 
-## Upstream
+## Where the builds come from
 
-These recipes are intended for contribution to a prpl-foundation feed. The lemond build comes from a public fork's
-`release/prpl-demo` branch; its musl support and runtime recipes are on their way to
-[upstream Lemonade](https://github.com/lemonade-sdk/lemonade).
+The lemond build comes from a public fork's `release/prpl-demo` branch
+([ianbmacdonald/lemonade](https://github.com/ianbmacdonald/lemonade)), not from upstream
+[Lemonade](https://github.com/lemonade-sdk/lemonade); its musl support and the LiteRT, TFLite and ExecuTorch recipes
+are not in upstream Lemonade. These recipes are not part of any prpl-foundation feed.
