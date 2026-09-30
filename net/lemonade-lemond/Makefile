@@ -35,7 +35,7 @@ define Package/lemonade-lemond
   SECTION:=net
   CATEGORY:=Network
   SUBMENU:=AI
-  TITLE:=lemonade lemond - OpenAI-compatible AI inference router (prebuilt musl, prpl-demo)
+  TITLE:=lemonade lemond - OpenAI-compatible AI inference router (prebuilt musl)
   URL:=https://github.com/ianbmacdonald/lemonade
   # musl-native x86_64 only (the only published build). Each NEEDED library maps to the package that ships it in the
   # prplOS 5.1 image, by the name the image PROVIDES: libwebsockets4-full provides 'libwebsockets4' (not

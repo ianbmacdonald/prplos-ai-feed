@@ -1,19 +1,19 @@
 # prplos-ai-feed
 
 OpenWrt / prplOS package recipes for running [Lemonade](https://github.com/lemonade-sdk/lemonade)'s `lemond` and a
-LiteRT-LM inference server on a prplOS gateway. They package the prebuilt, musl-native builds used in the prpl AI
-working-group demo: one OpenAI-compatible API on the gateway, with on-box runtimes (LiteRT-LM, TFLite, ONNX Runtime,
+LiteRT-LM inference server on a prplOS gateway. They package prebuilt, musl-native builds that give a prpl Foundation
+prplOS gateway one OpenAI-compatible API, with on-box runtimes (LiteRT-LM, TFLite, ONNX Runtime,
 ExecuTorch) and policy routing to hosts on the LAN or in a private data centre.
 
 > Status: **experimental**. Tested on prplOS 5.1.0 x86_64 (a 2 vCPU, 2 GB virtual gateway). Only x86_64 packages are
 > released. The aarch64 recipe of litert-lm-server (a glibc bundle run on the musl host) is **unvalidated**: it builds,
-> but has not been run on hardware; do not use it in a demo or deployment until it has been.
+> but has not been run on hardware; do not deploy it until it has been.
 
 ## Packages
 
 | Package | What it installs | Source it packages |
 |---|---|---|
-| `lemonade-lemond` | `lemond` + the `lemonade` CLI (musl, x86_64), a procd service, a supervisor that enforces an API key and binds only the LAN address, and a TR-181 firewall helper that opens a source-restricted rule only while lemond listens | [lemonade fork release `prpl-demo-musl-2026.41.0-69080e669`](https://github.com/ianbmacdonald/lemonade/releases/tag/prpl-demo-musl-2026.41.0-69080e669) |
+| `lemonade-lemond` | `lemond` + the `lemonade` CLI (musl, x86_64), a procd service, a supervisor that enforces an API key and binds only the LAN address, and a TR-181 firewall helper that opens a source-restricted rule only while lemond listens | [lemonade fork release, musl build 69080e669](https://github.com/ianbmacdonald/lemonade/releases/tag/prpl-demo-musl-2026.41.0-69080e669) |
 | `litert-lm-server` | an OpenAI-compatible server over Google [LiteRT-LM](https://github.com/google-ai-edge/LiteRT-LM) (CPU): musl on x86_64 (v0.3.0), a self-contained glibc bundle on aarch64 (v0.2.2) | [litert-lm-server releases](https://github.com/ianbmacdonald/litert-lm-server/releases) |
 
 The other runtime servers lemond can launch are published as standalone musl tarballs and are not packaged here yet:
@@ -100,7 +100,7 @@ package: lemond is Apache-2.0; litert-lm-server is Apache-2.0 plus the staticall
 
 ## Where the builds come from
 
-The lemond build comes from a public fork's `release/prpl-demo` branch
+The lemond build comes from a release branch of a public fork
 ([ianbmacdonald/lemonade](https://github.com/ianbmacdonald/lemonade)), not from upstream
 [Lemonade](https://github.com/lemonade-sdk/lemonade); its musl support and the LiteRT, TFLite and ExecuTorch recipes
 are not in upstream Lemonade. These recipes are not part of any prpl-foundation feed.
