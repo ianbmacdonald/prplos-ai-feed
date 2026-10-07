@@ -13,17 +13,18 @@ include $(TOPDIR)/rules.mk
 PKG_NAME:=lemonade-lemond
 # The version is lemond's BUILD NUMBER, not its git hash: hashes are not ordered, so opkg can read a newer build as
 # older and refuse the upgrade (seen with 6be19fdca vs 552245997). `lemond --version` prints 2026.41.0~<build>.<hash>.
-PKG_VERSION:=2026.41.1706
-PKG_RELEASE:=16
+PKG_VERSION:=2026.42.1729
+PKG_RELEASE:=1
 
-# Build 69080e669: beacon listener with an interface allow-list and trusted relays (a named relay may advertise a
-# listed host's URL), public route names, classify-only routing/validate, parallel resumable model downloads.
-# PKG_HASH is the release asset's sha256 (6,862,905 bytes); the SDK re-verifies it at download.
-PKG_SOURCE:=lemonade-embeddable-2026.41.0-69080e669-prplos5.1-x86_64-musl.tar.gz
-PKG_SOURCE_URL:=https://github.com/ianbmacdonald/lemonade/releases/download/prpl-demo-musl-2026.41.0-69080e669
-PKG_HASH:=d37665c391defaff10470790cc58328911d0b20638d5b849d6bfd18c6ff2889c
+# Build 6e16ce1c3 (2026.42.0~1729): everything in 69080e669 (beacon listener with an interface allow-list and trusted
+# relays, public route names, classify-only routing/validate, parallel resumable downloads) plus POST /v1/pull
+# "revision": pin a model to an exact Hugging Face commit. Runtime libraries unchanged.
+# PKG_HASH is the release asset's sha256 (6,877,321 bytes); the SDK re-verifies it at download.
+PKG_SOURCE:=lemonade-embeddable-2026.42.0-6e16ce1c3-prplos5.1-x86_64-musl.tar.gz
+PKG_SOURCE_URL:=https://github.com/ianbmacdonald/lemonade/releases/download/prpl-demo-musl-2026.42.0-6e16ce1c3
+PKG_HASH:=15b8b42d435db3a3260dd3c5d6f5a4f809efeebcbc8d052fba6c1f7f6d9fc9f2
 # The tarball unpacks to a top-level dir of its own name (not $(PKG_NAME)-$(PKG_VERSION)).
-PKG_BUILD_DIR:=$(BUILD_DIR)/lemonade-embeddable-2026.41.0-69080e669-prplos5.1-x86_64-musl
+PKG_BUILD_DIR:=$(BUILD_DIR)/lemonade-embeddable-2026.42.0-6e16ce1c3-prplos5.1-x86_64-musl
 
 PKG_MAINTAINER:=Ian MacDonald <ian@netstatz.com>
 # Apache-2.0 for lemond itself; GPL-2.0-only for this package's own scripts (supervisor, firewall helper, init).
@@ -41,6 +42,9 @@ define Package/lemonade-lemond
   # prplOS 5.1 image, by the name the image PROVIDES: libwebsockets4-full provides 'libwebsockets4' (not
   # 'libwebsockets-full'; opkg refuses the latter), libcurl4 provides 'libcurl', libstdcpp6 provides 'libstdcpp'.
   DEPENDS:=@x86_64 +zlib +libcurl +libwebsockets4 +libcap +libstdcpp
+  # lemond and the runtime servers it starts run as this unprivileged user; the supervisor stays root only to read
+  # the root-only API key and to open/close the TR-181 firewall rule.
+  USERID:=lemond=392:lemond=392
 endef
 
 define Package/lemonade-lemond/description
@@ -80,6 +84,8 @@ define Package/lemonade-lemond/install
 	$(INSTALL_DIR) $(1)/usr/libexec
 	$(INSTALL_BIN) ./files/lemond-run $(1)/usr/libexec/lemond-run
 	$(INSTALL_BIN) ./files/lemond-fw $(1)/usr/libexec/lemond-fw
+	$(INSTALL_DIR) $(1)/usr/share/lemond
+	$(INSTALL_DATA) ./files/lemond-nocaps.json $(1)/usr/share/lemond/nocaps.json
 	$(INSTALL_DIR) $(1)/etc/init.d
 	$(INSTALL_BIN) ./files/lemond.init $(1)/etc/init.d/lemond
 	$(INSTALL_DIR) $(1)/etc/config

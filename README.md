@@ -5,22 +5,24 @@ LiteRT-LM inference server on a prplOS gateway. They package prebuilt, musl-nati
 prplOS gateway one OpenAI-compatible API, with on-box runtimes (LiteRT-LM, TFLite, ONNX Runtime,
 ExecuTorch) and policy routing to hosts on the LAN or in a private data centre.
 
-> Status: **experimental**. Tested on prplOS 5.1.0 x86_64 (a 2 vCPU, 2 GB virtual gateway). Only x86_64 packages are
-> released. The aarch64 recipe of litert-lm-server (a glibc bundle run on the musl host) is **unvalidated**: it builds,
+> Status: **experimental**. The current packages are tested on prplOS 5.2.0 x86_64 (a 2 vCPU, 2 GB virtual gateway);
+> earlier releases were tested on 5.1.0. Only x86_64 packages are released. The aarch64 recipe of litert-lm-server (a glibc bundle run on the musl host) is **unvalidated**: it builds,
 > but has not been run on hardware; do not deploy it until it has been.
 
 ## Packages
 
 | Package | What it installs | Source it packages |
 |---|---|---|
-| `lemonade-lemond` | `lemond` + the `lemonade` CLI (musl, x86_64), a procd service, a supervisor that enforces an API key and binds only the LAN address, and a TR-181 firewall helper that opens a source-restricted rule only while lemond listens | [lemonade fork release, musl build 69080e669](https://github.com/ianbmacdonald/lemonade/releases/tag/prpl-demo-musl-2026.41.0-69080e669) |
+| `lemonade-lemond` | `lemond` + the `lemonade` CLI (musl, x86_64), a procd service that runs lemond and every runtime it starts as the unprivileged user `lemond`, a supervisor that enforces an API key and binds only the LAN address, and a TR-181 firewall helper that opens a source-restricted rule only while lemond listens | [lemonade fork release, musl build 6e16ce1c3](https://github.com/ianbmacdonald/lemonade/releases/tag/prpl-demo-musl-2026.42.0-6e16ce1c3) |
 | `litert-lm-server` | an OpenAI-compatible server over Google [LiteRT-LM](https://github.com/google-ai-edge/LiteRT-LM) (CPU): musl on x86_64 (v0.3.0), a self-contained glibc bundle on aarch64 (v0.2.2) | [litert-lm-server releases](https://github.com/ianbmacdonald/litert-lm-server/releases) |
+| `tflite-server` | LiteRT v2.2.0 (TFLite) behind lemonade's `/v1/classify` contract: text classifiers and image CNNs (musl, x86_64) | [tflite-server v0.2.0](https://github.com/ianbmacdonald/tflite-server/releases/tag/v0.2.0) |
+| `ort-server` | ONNX Runtime behind the same contract (musl, x86_64); the wrapper starts it with 2 worker threads unless `--threads` is given or `ORT_SERVER_THREADS` is set | [ort-server v0.1.2-musl](https://github.com/ianbmacdonald/ort-server/releases/tag/v0.1.2-musl) |
+| `et-server` | ExecuTorch v1.5.1 (XNNPACK backend) behind the same contract (musl, x86_64) | [et-server v0.1.0](https://github.com/ianbmacdonald/et-server/releases/tag/v0.1.0) |
 
-The other runtime servers lemond can launch are published as standalone musl tarballs and are not packaged here yet:
-[tflite-server](https://github.com/ianbmacdonald/tflite-server/releases),
-[ort-server](https://github.com/ianbmacdonald/ort-server/releases),
-[et-server](https://github.com/ianbmacdonald/et-server/releases). Unpack them on persistent storage and point lemond
-at them (`option server_path` in `/etc/config/lemond`, or the runtime's `*_bin` key in `/etc/lemond/config.json`).
+Each runtime server installs under `/usr/lib/<name>/` with a `/usr/bin/<name>` wrapper; install only the runtimes you
+use. lemond finds litert-lm-server, tflite-server and et-server on its default `PATH`. For ort-server, name it in
+`/etc/lemond/config.json`: `"onnxruntime": {"cpu_bin": "/usr/bin/ort-server"}`. The packaged `config.json` sets
+`"no_fetch_executables": true`, so lemond never downloads a runtime binary of its own.
 
 ## Install the prebuilt packages (x86_64)
 
@@ -31,7 +33,8 @@ Download the `.ipk` files and `SHA256SUMS` from this repository's
 sha256sum -c SHA256SUMS                       # every line must say OK
 opkg update                                   # if the image's feeds are reachable; the dependencies below are
                                               # usually already installed on a prplOS image
-opkg install lemonade-lemond_*_x86_64.ipk litert-lm-server_*_x86_64.ipk
+opkg install lemonade-lemond_*_x86_64.ipk litert-lm-server_*_x86_64.ipk \
+    tflite-server_*_x86_64.ipk ort-server_*_x86_64.ipk et-server_*_x86_64.ipk   # any subset
 ```
 
 Dependencies come from the image's own feeds: `zlib`, `libcurl`, `libwebsockets4` (libwebsockets4-full),
@@ -42,9 +45,10 @@ Then configure (lemond is **disabled and closed by default**):
 ```sh
 umask 077; head -c 24 /dev/urandom | hexdump -v -e '/1 "%02x"' > /etc/lemond/api_key   # 48 hex chars
 chmod 0600 /etc/lemond/api_key                                       # the service refuses any other mode
-uci set lemond.main.cache_dir='/mnt/data/lemond'                     # persistent, writable, not tmpfs
-# and in /etc/lemond/config.json set "models_dir" to persistent storage too (the default /srv/lemond/models
-# is on the flash overlay, too small for most models)
+uci set lemond.main.cache_dir='/mnt/data/lemond'                     # persistent, not tmpfs, below /mnt or /srv
+uci set lemond.main.models_dir='/mnt/data/lemond-models'             # where pulls land; below /mnt or /srv
+# and set the SAME path as "models_dir" in /etc/lemond/config.json (the default /srv/lemond/models is on the
+# flash overlay, too small for most models). Both directories are handed to the 'lemond' user at start.
 uci add_list lemond.fw.allow_src='192.168.1.10/32'                   # who may reach the API (else: nobody)
 uci set lemond.main.enabled='1'; uci commit lemond
 /etc/init.d/lemond start
@@ -61,7 +65,8 @@ In a prplOS (OpenWrt) SDK or buildroot:
 ```sh
 echo "src-git prplos_ai https://github.com/ianbmacdonald/prplos-ai-feed.git" >> feeds.conf
 ./scripts/feeds update prplos_ai && ./scripts/feeds install -a -p prplos_ai
-make package/lemonade-lemond/compile package/litert-lm-server/compile
+make package/lemonade-lemond/compile package/litert-lm-server/compile \
+    package/tflite-server/compile package/ort-server/compile package/et-server/compile
 ```
 
 The recipes download the prebuilt release assets and check them against the sha256 in each Makefile; nothing is
@@ -70,6 +75,12 @@ carry those base packages; the gateway image does. `net/lemonade-lemond/test-lem
 
 ## Security model (lemond)
 
+- lemond, and every runtime server it starts, runs as the unprivileged user `lemond` (created by the package), with
+  `no_new_privs` set and an empty capability set (through procd's `ujail`), so a setuid binary cannot raise it.
+  Only the root supervisor reads the API key and manages the firewall rule. The paths lemond may write come from the
+  root-owned `/etc/config/lemond`, must be real directories below `/mnt` or `/srv`, and are refused if any path
+  component is a symlink. Accelerator device nodes are opened to the service only when listed (`list device`).
+  `option user 'root'` restores the old, privileged behaviour.
 - Binds only an IPv4 address on `br-lan`: never `0.0.0.0`, loopback or the WAN.
 - Refuses to start without an API key file (root-owned, mode 0600). The key reaches lemond through its environment,
   never its command line. With the key set, every lemond route, admin included, answered 401 without it on our test
@@ -95,7 +106,8 @@ carry those base packages; the gateway image does. `net/lemonade-lemond/test-lem
 The recipes in this repository, and the scripts they install (supervisor, firewall helper, init scripts, wrapper),
 are licensed under **GPL-2.0-only** (see `LICENSE`), like the OpenWrt packages feed.
 The packaged software keeps its own licences, declared in each Makefile's `PKG_LICENSE` and installed with the
-package: lemond is Apache-2.0; litert-lm-server is Apache-2.0 plus the statically linked components listed in its
+package: lemond is Apache-2.0; tflite-server, ort-server and et-server are Apache-2.0 plus the statically linked
+components each Makefile lists; litert-lm-server is Apache-2.0 plus the statically linked components listed in its
 `licenses/INDEX.md` (and, for the aarch64 glibc bundle, the LGPL/GCC-runtime-exception notices of that runtime).
 
 ## Where the builds come from

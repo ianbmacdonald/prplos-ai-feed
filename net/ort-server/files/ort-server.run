@@ -1,0 +1,9 @@
+#!/bin/sh
+# PATH wrapper for the ort-server prebuilt musl bundle, installed under /usr/lib/ort-server. It execs the real path so the
+# binary's $ORIGIN (RUNPATH) is its own bin/ directory, and the process keeps this PID (lemond stops it by PID).
+BIN=/usr/lib/ort-server/bin/ort-server
+[ -x "$BIN" ] || { echo "ort-server: server binary missing or not executable: $BIN" >&2; exit 127; }
+# v0.1.2 adds --threads N. Without it ONNX Runtime pins one worker per CPU it detects and escapes cpusets/taskset.
+# Default to the gateway's 2 CPUs unless the caller already chose: lemond needs no change.
+case " $* " in *" --threads "*|*" --threads="*) exec "$BIN" "$@" ;; esac
+exec "$BIN" --threads "${ORT_SERVER_THREADS:-2}" "$@"

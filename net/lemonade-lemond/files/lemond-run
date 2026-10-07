@@ -4,8 +4,10 @@
 # - the rule is opened ONLY once lemond is listening, and re-checked every 10 s (tr181-firewall can lose it);
 # - on ANY exit (stop, crash, failed start, respawn exhaustion) the trap removes the rule BEFORE lemond is killed.
 # The API key is read here at exec time and handed to lemond alone: it is never in procd state, never exported
-# from this shell. Args: <key_file> <host|auto> <port> <cache_dir> <config_dir> <server_path> <placeholders...>
-KEY_FILE=$1 HOST=$2 PORT=$3 CACHE=$4 CONF=$5 SPATH=$6; shift 6
+# from this shell. (lemond passes its environment to the runtime servers it starts, so they can see it too, as the
+# same unprivileged user.) Args: <key_file> <host|auto> <port> <cache_dir> <config_dir> <server_path> <user> <placeholders...>
+# lemond is started as <user> (the runtime servers it spawns inherit it); 'root' keeps the old behaviour.
+KEY_FILE=$1 HOST=$2 PORT=$3 CACHE=$4 CONF=$5 SPATH=$6 RUNAS=$7; shift 7
 FW=/usr/libexec/lemond-fw
 STOPPING=/var/run/lemond.stopping
 log() { logger -t lemond -p "daemon.$1" "$2"; }
@@ -45,7 +47,10 @@ HOST=$h
 # returned 500). The supervisor keeps line buffering; lemond and its backends must not inherit the preload.
 unset LD_PRELOAD
 ulimit -c 0                         # no core file can carry the key
-[ -n "$SPATH" ] && PATH="$SPATH:$PATH"; export PATH
+# The supervisor is root: its own PATH is fixed. server_path is for the backends lemond starts, so it goes only into
+# lemond's environment - a server_path the service user could write must never reach root.
+PATH=/usr/sbin:/usr/bin:/sbin:/bin; export PATH
+LPATH=$PATH; [ -n "$SPATH" ] && LPATH="$SPATH:$PATH"
 
 rm -f "$STOPPING"
 # A lemond still running here was orphaned by a SIGKILLed supervisor (OOM, term_timeout): it would hold the
@@ -60,7 +65,21 @@ while p=$(daemons); [ -n "$p" ]; do
 	[ $t -ge 20 ] && die "orphaned lemond ($p) will not exit"
 	sleep 1
 done
-LEMONADE_API_KEY=$KEY /usr/lib/lemond/lemond --host "$HOST" --port "$PORT" --no-broadcast --log-file disabled "$CACHE" "$CONF" &
+if [ "$RUNAS" = root ]; then
+	PATH=$LPATH LEMONADE_API_KEY=$KEY /usr/lib/lemond/lemond --host "$HOST" --port "$PORT" --no-broadcast --log-file disabled "$CACHE" "$CONF" &
+else
+	# ujail (procd's jail tool, no namespaces): runs lemond as $RUNAS with PR_SET_NO_NEW_PRIVS set and an EMPTY
+	# capability bounding set, so no setuid binary (su on this image) can raise it or any runtime it starts - procd's
+	# own no_new_privs is not applied on this image (measured). ujail stays as lemond's parent: $! is ujail, it exits
+	# when lemond does and forwards TERM (both measured), so the liveness loop and cleanup below work on its pid.
+	# ujail passes only the variables named with -e.
+	IMPORT="-e HOME -e LEMONADE_API_KEY -e PATH"
+	for v in $(env | cut -d= -f1); do                       # names only; a case glob, no regex dialect to trip on
+		case "$v" in LEMONADE_*_API_KEY|MODELSCOPE_ENDPOINT|HF_ENDPOINT) IMPORT="$IMPORT -e $v" ;; esac
+	done
+	PATH=$LPATH HOME=$CACHE LEMONADE_API_KEY=$KEY /sbin/ujail -C /usr/share/lemond/nocaps.json -c -U "$RUNAS" -G "$RUNAS" $IMPORT -- \
+		/usr/lib/lemond/lemond --host "$HOST" --port "$PORT" --no-broadcast --log-file disabled "$CACHE" "$CONF" &
+fi
 LPID=$!; KEY=; SPID=
 cleanup() {
 	trap - TERM INT HUP
@@ -79,6 +98,8 @@ until netstat -ltn 2>/dev/null | grep -q " $HOST:$PORT "; do
 done
 log notice "lemond listening on $HOST:$PORT (pid $LPID)"
 
+# ACCEPTED: the listener check does not prove the socket is lemond's. Only the service user could
+# bind the port in lemond's place, and that user IS lemond - it gains nothing it did not already serve.
 # kill -0 succeeds on a ZOMBIE: this loop ends on lemond death only because busybox ash's wait (below)
 # reaps every exited child. Tested: kill -9 lemond -> loop exits, rule gone in 7 s.
 while kill -0 "$LPID" 2>/dev/null; do

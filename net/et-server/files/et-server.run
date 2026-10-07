@@ -1,0 +1,6 @@
+#!/bin/sh
+# PATH wrapper for the et-server prebuilt musl bundle, installed under /usr/lib/et-server. It execs the real path so the
+# binary's $ORIGIN (RUNPATH) is its own bin/ directory, and the process keeps this PID (lemond stops it by PID).
+BIN=/usr/lib/et-server/bin/et-server
+[ -x "$BIN" ] || { echo "et-server: server binary missing or not executable: $BIN" >&2; exit 127; }
+exec "$BIN" "$@"
