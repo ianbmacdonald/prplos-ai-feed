@@ -13,25 +13,28 @@ include $(TOPDIR)/rules.mk
 PKG_NAME:=lemonade-lemond
 # The version is lemond's BUILD NUMBER, not its git hash: hashes are not ordered, so opkg can read a newer build as
 # older and refuse the upgrade (seen with 6be19fdca vs 552245997). `lemond --version` prints 2026.41.0~<build>.<hash>.
-PKG_VERSION:=2026.42.1729
+# The week comes first (<year>.<week>.<build>), so opkg orders by upstream's release week, then the build number;
+# keep the week of the newest asset so a later build never reads as older.
+PKG_VERSION:=2026.43.1734
 PKG_RELEASE:=1
 
-# Build 6e16ce1c3 (2026.42.0~1729): everything in 69080e669 (beacon listener with an interface allow-list and trusted
-# relays, public route names, classify-only routing/validate, parallel resumable downloads) plus POST /v1/pull
-# "revision": pin a model to an exact Hugging Face commit. Runtime libraries unchanged.
-# PKG_HASH is the release asset's sha256 (6,877,321 bytes); the SDK re-verifies it at download.
-# aarch64 (6,277,469 bytes): the SAME source commit 6e16ce1c3, built with the prplOS 5.1 aarch64 musl toolchain
-# (-march=armv8-a+crc -mtune=cortex-a53). Its asset name and `lemond --version` read 2026.43.0 only because upstream
-# labels a build by the release week of its build date; the code is identical, so PKG_VERSION stays the build number.
+# Build 571d17e15 (2026.43.0~1734): 6e16ce1c3 plus three optional gateway limits in config.json. Unset, they keep
+# 6e16ce1c3's behaviour: max_request_body_mb defaults to 100 (6e16ce1c3 had the same 100 MB cpp-httplib ceiling, now
+# configurable; larger bodies get 413), request_receive_timeout (seconds a client has to send a whole request) and
+# max_connections_per_client (per source address; loopback exempt) default to 0 = off. Runtime libraries unchanged.
+# Suggested on a gateway: 32 / 30 / a cap ABOVE the largest legitimate client's own connection pool (a reverse proxy
+# or portal in front of lemond is one address). On an IPv6 LAN one host can use many addresses: leave the cap off there.
+# PKG_HASH is each release asset's sha256 (x86_64 6,897,942 bytes; aarch64 6,292,342 bytes, built with the prplOS 5.1
+# aarch64 musl toolchain, -march=armv8-a+crc -mtune=cortex-a53). Both assets carry 2026.43.0 in their names.
 ifeq ($(ARCH),aarch64)
-  BUNDLE:=lemonade-embeddable-2026.43.0-6e16ce1c3-prplos5-aarch64-musl
-  PKG_HASH:=a8803e63fb5c3631e74cf6bee98fd6ebcd723ee341beafb924cd3e6ec8ebe8de
+  BUNDLE:=lemonade-embeddable-2026.43.0-571d17e15-prplos5-aarch64-musl
+  PKG_HASH:=9b5b0312dc1229a189b80ec2898e513949d8db570da154b200ede817f3677a9c
 else
-  BUNDLE:=lemonade-embeddable-2026.42.0-6e16ce1c3-prplos5.1-x86_64-musl
-  PKG_HASH:=15b8b42d435db3a3260dd3c5d6f5a4f809efeebcbc8d052fba6c1f7f6d9fc9f2
+  BUNDLE:=lemonade-embeddable-2026.43.0-571d17e15-prplos5.1-x86_64-musl
+  PKG_HASH:=f5a57e4febb42b45b395dc555bcbcde9f1e03e3babf326220887a7a9a5d8fad3
 endif
 PKG_SOURCE:=$(BUNDLE).tar.gz
-PKG_SOURCE_URL:=https://github.com/ianbmacdonald/lemonade/releases/download/prpl-demo-musl-2026.42.0-6e16ce1c3
+PKG_SOURCE_URL:=https://github.com/ianbmacdonald/lemonade/releases/download/prpl-demo-musl-2026.43.0-571d17e15
 # The tarball unpacks to a top-level dir of its own name (not $(PKG_NAME)-$(PKG_VERSION)).
 PKG_BUILD_DIR:=$(BUILD_DIR)/$(BUNDLE)
 
