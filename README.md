@@ -10,8 +10,9 @@ ExecuTorch) and policy routing to hosts on the LAN or in a private data centre.
 > `et-server` are also released for **aarch64** (`aarch64_cortex-a53`, built in a prplOS 5.2.0 ipq807x buildroot). Of
 > those, `lemonade-lemond` has been installed with `opkg` over a running prplOS 5.2.0 image on a 1 GB Dynalink DL-WRX36
 > (IPQ8072A) and run there as a routing-only gateway: it forwards chat to a LAN AI server through a router model
-> (9 October 2026; lemond 19 MB resident, 4 MB anonymous). The three runtime servers have not been run on Arm hardware
-> (their authors tested them under qemu); treat them as **unvalidated** until they have been.
+> (9 October 2026; lemond 19 MB resident, 4 MB anonymous). `tflite-server` has run there too, classifying images with
+> MobileNetV2 (45-53 ms inference, its weight cache kept in RAM); `ort-server` and `et-server` have not been run on Arm
+> hardware (their authors tested them under qemu): treat those two as **unvalidated** until they have been.
 > The aarch64 recipe of litert-lm-server (a glibc bundle run on the musl host) is also unvalidated and is not released.
 
 ## Packages
