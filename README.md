@@ -9,8 +9,9 @@ ExecuTorch) and policy routing to hosts on the LAN or in a private data centre.
 > earlier releases were tested on 5.1.0. From release v2026.10.09 `lemonade-lemond`, `tflite-server`, `ort-server` and
 > `et-server` are also released for **aarch64** (`aarch64_cortex-a53`, built in a prplOS 5.2.0 ipq807x buildroot). Of
 > those, `lemonade-lemond` has been installed with `opkg` over a running prplOS 5.2.0 image on a 1 GB Dynalink DL-WRX36
-> (IPQ8072A); it has not yet been run there, and the three runtime servers have not been run on Arm hardware (their
-> authors tested them under qemu). Treat the aarch64 packages as **unvalidated** until they have been.
+> (IPQ8072A) and run there as a routing-only gateway: it forwards chat to a LAN AI server through a router model
+> (9 October 2026; lemond 19 MB resident, 4 MB anonymous). The three runtime servers have not been run on Arm hardware
+> (their authors tested them under qemu); treat them as **unvalidated** until they have been.
 > The aarch64 recipe of litert-lm-server (a glibc bundle run on the musl host) is also unvalidated and is not released.
 
 ## Packages
@@ -39,7 +40,7 @@ opkg update                                   # if the image's feeds are reachab
                                               # usually already installed on a prplOS image
 opkg install lemonade-lemond_*_x86_64.ipk litert-lm-server_*_x86_64.ipk \
     tflite-server_*_x86_64.ipk ort-server_*_x86_64.ipk et-server_*_x86_64.ipk   # any subset
-# aarch64 (unvalidated, see Status): the same names ending _aarch64_cortex-a53.ipk; litert-lm-server is not released
+# aarch64 (see Status: lemond run on hardware, the runtime servers not yet): the same names ending _aarch64_cortex-a53.ipk; litert-lm-server is not released
 ```
 
 The three runtime servers carry a **curated** operator set: the operators the reference models of six gateway use cases
