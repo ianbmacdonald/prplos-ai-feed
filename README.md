@@ -5,26 +5,30 @@ LiteRT-LM inference server on a prplOS gateway. They package prebuilt, musl-nati
 prplOS gateway one OpenAI-compatible API, with on-box runtimes (LiteRT-LM, TFLite, ONNX Runtime,
 ExecuTorch) and policy routing to hosts on the LAN or in a private data centre.
 
-> Status: **experimental**. The current packages are tested on prplOS 5.2.0 x86_64 (a 2 vCPU, 2 GB virtual gateway);
-> earlier releases were tested on 5.1.0. Only x86_64 packages are released. The aarch64 recipe of litert-lm-server (a glibc bundle run on the musl host) is **unvalidated**: it builds,
-> but has not been run on hardware; do not deploy it until it has been.
+> Status: **experimental**. The x86_64 packages are tested on prplOS 5.2.0 x86_64 (a 2 vCPU, 2 GB virtual gateway);
+> earlier releases were tested on 5.1.0. From release v2026.10.09 `lemonade-lemond`, `tflite-server`, `ort-server` and
+> `et-server` are also released for **aarch64** (`aarch64_cortex-a53`, built in a prplOS 5.2.0 ipq807x buildroot). Of
+> those, `lemonade-lemond` has been installed with `opkg` over a running prplOS 5.2.0 image on a 1 GB Dynalink DL-WRX36
+> (IPQ8072A); it has not yet been run there, and the three runtime servers have not been run on Arm hardware (their
+> authors tested them under qemu). Treat the aarch64 packages as **unvalidated** until they have been.
+> The aarch64 recipe of litert-lm-server (a glibc bundle run on the musl host) is also unvalidated and is not released.
 
 ## Packages
 
 | Package | What it installs | Source it packages |
 |---|---|---|
-| `lemonade-lemond` | `lemond` + the `lemonade` CLI (musl, x86_64), a procd service that runs lemond and every runtime it starts as the unprivileged user `lemond`, a supervisor that enforces an API key and binds only the LAN address, and a TR-181 firewall helper that opens a source-restricted rule only while lemond listens | [lemonade fork release, musl build 6e16ce1c3](https://github.com/ianbmacdonald/lemonade/releases/tag/prpl-demo-musl-2026.42.0-6e16ce1c3) |
+| `lemonade-lemond` | `lemond` + the `lemonade` CLI (musl, x86_64 and aarch64), a procd service that runs lemond and every runtime it starts as the unprivileged user `lemond`, a supervisor that enforces an API key and binds only the LAN address, and a TR-181 firewall helper that opens a source-restricted rule only while lemond listens | [lemonade fork release, musl build 6e16ce1c3](https://github.com/ianbmacdonald/lemonade/releases/tag/prpl-demo-musl-2026.42.0-6e16ce1c3) |
 | `litert-lm-server` | an OpenAI-compatible server over Google [LiteRT-LM](https://github.com/google-ai-edge/LiteRT-LM) (CPU): musl on x86_64 (v0.3.0), a self-contained glibc bundle on aarch64 (v0.2.2) | [litert-lm-server releases](https://github.com/ianbmacdonald/litert-lm-server/releases) |
-| `tflite-server` | LiteRT v2.2.0 (TFLite) behind lemonade's `/v1/classify` contract: text classifiers and image CNNs (musl, x86_64) | [tflite-server v0.2.0](https://github.com/ianbmacdonald/tflite-server/releases/tag/v0.2.0) |
-| `ort-server` | ONNX Runtime behind the same contract (musl, x86_64); the wrapper starts it with 2 worker threads unless `--threads` is given or `ORT_SERVER_THREADS` is set | [ort-server v0.1.2-musl](https://github.com/ianbmacdonald/ort-server/releases/tag/v0.1.2-musl) |
-| `et-server` | ExecuTorch v1.5.1 (XNNPACK backend) behind the same contract (musl, x86_64) | [et-server v0.1.0](https://github.com/ianbmacdonald/et-server/releases/tag/v0.1.0) |
+| `tflite-server` | LiteRT v2.2.0 (TFLite) behind lemonade's `/v1/classify` contract: text classifiers and image CNNs (musl, x86_64 and aarch64; curated operator set) | [tflite-server v0.3.0](https://github.com/ianbmacdonald/tflite-server/releases/tag/v0.3.0) |
+| `ort-server` | ONNX Runtime behind the same contract (musl, x86_64 and aarch64; curated minimal build, `.ort` models only); the wrapper starts it with 2 worker threads unless `--threads` is given or `ORT_SERVER_THREADS` is set | [ort-server v0.2.1-musl](https://github.com/ianbmacdonald/ort-server/releases/tag/v0.2.1-musl) |
+| `et-server` | ExecuTorch v1.5.1 (XNNPACK backend) behind the same contract (musl, x86_64 and aarch64; curated kernel set) | [et-server v0.2.0](https://github.com/ianbmacdonald/et-server/releases/tag/v0.2.0) |
 
 Each runtime server installs under `/usr/lib/<name>/` with a `/usr/bin/<name>` wrapper; install only the runtimes you
 use. lemond finds litert-lm-server, tflite-server and et-server on its default `PATH`. For ort-server, name it in
 `/etc/lemond/config.json`: `"onnxruntime": {"cpu_bin": "/usr/bin/ort-server"}`. The packaged `config.json` sets
 `"no_fetch_executables": true`, so lemond never downloads a runtime binary of its own.
 
-## Install the prebuilt packages (x86_64)
+## Install the prebuilt packages
 
 Download the `.ipk` files and `SHA256SUMS` from this repository's
 [Releases](https://github.com/ianbmacdonald/prplos-ai-feed/releases), then on the gateway:
@@ -35,7 +39,13 @@ opkg update                                   # if the image's feeds are reachab
                                               # usually already installed on a prplOS image
 opkg install lemonade-lemond_*_x86_64.ipk litert-lm-server_*_x86_64.ipk \
     tflite-server_*_x86_64.ipk ort-server_*_x86_64.ipk et-server_*_x86_64.ipk   # any subset
+# aarch64 (unvalidated, see Status): the same names ending _aarch64_cortex-a53.ipk; litert-lm-server is not released
 ```
+
+The three runtime servers carry a **curated** operator set: the operators the reference models of six gateway use cases
+need (text classification, sentence embeddings, image classification, object detection, audio, time series). A model
+that needs an operator outside the set is refused at load, with an error naming it; each server's repository documents
+how to build the general (all-operator) version.
 
 Dependencies come from the image's own feeds: `zlib`, `libcurl`, `libwebsockets4` (libwebsockets4-full),
 `libcap`, `libstdcpp`, `libgcc`.

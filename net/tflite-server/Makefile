@@ -1,7 +1,7 @@
-# OpenWrt / prplOS package: tflite-server (lemonade backend server, prebuilt musl bundle; prpl-harness planning G006)
+# OpenWrt / prplOS package: tflite-server (lemonade backend server, prebuilt musl bundle)
 #
-# Packages the prebuilt musl x86_64 bundle published at github.com/ianbmacdonald/tflite-server (lemonade writes and builds it,
-# on our prplOS 5.1 musl toolchain; we package and verify, as for litert-lm-server). Nothing is compiled here.
+# Packages the prebuilt musl bundle (x86_64 or aarch64) published at github.com/ianbmacdonald/tflite-server (lemonade writes and builds it,
+# on the prplOS 5.1 musl toolchains; we package and verify, as for litert-lm-server). Nothing is compiled here.
 # lemond starts the server as a subprocess: from PATH, or from an explicit path in its config.json. There is no
 # service of its own (no init, no uci).
 # The bundle unpacks to a top-level directory named like the asset, hence PKG_BUILD_DIR.
@@ -9,13 +9,19 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=tflite-server
-PKG_VERSION:=0.2.0
+PKG_VERSION:=0.3.0
 PKG_RELEASE:=1
 
-BUNDLE:=tflite-server-musl-x86_64-v0.2.0
+# One prebuilt bundle per architecture; both are on the same release, each with its own sha256.
+ifeq ($(ARCH),aarch64)
+  BUNDLE:=tflite-server-musl-aarch64-v0.3.0
+  PKG_HASH:=3040b976cc5fecec470027dbb2def2f9ea54008ad551f64c5eb281cf719ccc1d
+else
+  BUNDLE:=tflite-server-musl-x86_64-v0.3.0
+  PKG_HASH:=5f4865f81431f6ff3858a4afd8f8ed7d984d7c18b97a4463dc9602eef2a8e2ef
+endif
 PKG_SOURCE:=$(BUNDLE).tar.gz
-PKG_SOURCE_URL:=https://github.com/ianbmacdonald/tflite-server/releases/download/v0.2.0
-PKG_HASH:=9abb099b38259c9931076ea9fac1706e75aa3d1ecd3163808e275de7a29d2950
+PKG_SOURCE_URL:=https://github.com/ianbmacdonald/tflite-server/releases/download/v0.3.0
 PKG_BUILD_DIR:=$(BUILD_DIR)/$(BUNDLE)
 
 PKG_MAINTAINER:=Ian MacDonald <ian@netstatz.com>
@@ -31,13 +37,15 @@ define Package/tflite-server
   SUBMENU:=AI
   TITLE:=LiteRT (TFLite) classification server for lemonade's tflite recipe (prebuilt musl bundle)
   URL:=https://github.com/ianbmacdonald/tflite-server
-  # One prebuilt bundle, musl x86_64 only. It links the image's libstdc++ and libgcc_s.
-  DEPENDS:=@x86_64 +libstdcpp +libgcc
+  # One prebuilt bundle per architecture (musl x86_64 or aarch64). It links the image's libstdc++ and libgcc_s.
+  DEPENDS:=@(x86_64||aarch64) +libstdcpp +libgcc
 endef
 
 define Package/tflite-server/description
   LiteRT v2.2.0 (static) behind lemonade's /v1/classify contract: text classifiers
-  (tokenizer + .tflite) and image CNNs, with an optional XNNPACK weight cache.
+  (tokenizer + .tflite) and image CNNs (/classify/image), with an optional XNNPACK
+  weight cache. Curated operator set: the 48 builtin ops the reference models of six
+  gateway use cases need; a model needing another op fails to load, naming it.
   Started by lemond (lemonade-lemond), not as a service of its own.
   Source: github.com/ianbmacdonald/tflite-server.
 endef

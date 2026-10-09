@@ -1,7 +1,7 @@
-# OpenWrt / prplOS package: ort-server (lemonade backend server, prebuilt musl bundle; prpl-harness planning G006)
+# OpenWrt / prplOS package: ort-server (lemonade backend server, prebuilt musl bundle)
 #
-# Packages the prebuilt musl x86_64 bundle published at github.com/ianbmacdonald/ort-server (lemonade writes and builds it,
-# on our prplOS 5.1 musl toolchain; we package and verify, as for litert-lm-server). Nothing is compiled here.
+# Packages the prebuilt musl bundle (x86_64 or aarch64) published at github.com/ianbmacdonald/ort-server (lemonade writes and builds it,
+# on the prplOS 5.1 musl toolchains; we package and verify, as for litert-lm-server). Nothing is compiled here.
 # lemond starts the server as a subprocess: from PATH, or from an explicit path in its config.json. There is no
 # service of its own (no init, no uci).
 # The bundle unpacks to a top-level directory named like the asset, hence PKG_BUILD_DIR.
@@ -9,13 +9,19 @@
 include $(TOPDIR)/rules.mk
 
 PKG_NAME:=ort-server
-PKG_VERSION:=0.1.2
+PKG_VERSION:=0.2.1
 PKG_RELEASE:=1
 
-BUNDLE:=ort-server-musl-x86_64-bertfamily-v0.1.2-musl
+# One prebuilt bundle per architecture; both are on the same release, each with its own sha256.
+ifeq ($(ARCH),aarch64)
+  BUNDLE:=ort-server-musl-aarch64-curated-v0.2.1-musl
+  PKG_HASH:=ca13b4337310c83f570c54c1fa39d795e134d3021ea9a687ac6f904ee0c1ac1f
+else
+  BUNDLE:=ort-server-musl-x86_64-curated-v0.2.1-musl
+  PKG_HASH:=9c4a52711779848d8d32333de27c33884612f796fdd29dc219967226a8cd2aee
+endif
 PKG_SOURCE:=$(BUNDLE).tar.gz
-PKG_SOURCE_URL:=https://github.com/ianbmacdonald/ort-server/releases/download/v0.1.2-musl
-PKG_HASH:=33f15c564e0fa8410fb9669eb673a8f5a20c2b7cf002d286897d2092665231dc
+PKG_SOURCE_URL:=https://github.com/ianbmacdonald/ort-server/releases/download/v0.2.1-musl
 PKG_BUILD_DIR:=$(BUILD_DIR)/$(BUNDLE)
 
 PKG_MAINTAINER:=Ian MacDonald <ian@netstatz.com>
@@ -31,8 +37,8 @@ define Package/ort-server
   SUBMENU:=AI
   TITLE:=ONNX Runtime classification server for lemonade's onnxruntime recipe (prebuilt musl bundle)
   URL:=https://github.com/ianbmacdonald/ort-server
-  # One prebuilt bundle, musl x86_64 only. It links the image's libstdc++ and libgcc_s.
-  DEPENDS:=@x86_64 +libstdcpp +libgcc
+  # One prebuilt bundle per architecture (musl x86_64 or aarch64). It links the image's libstdc++ and libgcc_s.
+  DEPENDS:=@(x86_64||aarch64) +libstdcpp +libgcc
 endef
 
 # libonnxruntime.so.1 ships INSIDE this package (bin/, found through the binary's RUNPATH $ORIGIN); the SDK's
@@ -42,8 +48,10 @@ define Package/ort-server/extra_provides
 endef
 
 define Package/ort-server/description
-  ONNX Runtime 1.30.0 minimal build (BERT-family operators only, x86 dispatch kept)
-  behind lemonade's /v1/classify contract. libonnxruntime.so.1 ships beside the binary.
+  ONNX Runtime 1.30.0 minimal build behind lemonade's /v1/classify contract
+  (text and /classify/image; loads .ort models only). Curated operator set: 60 entries,
+  the reference models of six gateway use cases plus the BERT family; a model needing
+  another operator fails to load, naming it. libonnxruntime.so.1 ships beside the binary.
   Started by lemond (lemonade-lemond), not as a service of its own.
   Source: github.com/ianbmacdonald/ort-server.
 endef
